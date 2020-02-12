@@ -1,0 +1,95 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.style as style
+import seaborn as sns
+import scipy.stats as st
+from os import listdir
+from os.path import isfile, join
+from tqdm import tqdm
+from collections import Counter
+
+## Carga de datos de fútbol
+liga = 'Francia'
+
+direccion = 'D:\\Datos\\Datos\\Datos futbol\\' + liga + '\\'
+archivos = [_ for _ in listdir(direccion) if isfile(join(direccion, _))]
+datos = [pd.read_csv(direccion + f) for f in archivos]
+
+## Carga de nomeclatura de columnas y creación de diccionario
+
+diccionario_txt = pd.read_csv('D:\\Datos\\Datos\\Datos futbol\\diccionario.csv', sep = ';')
+descripcion_columna = diccionario_txt.apply(lambda fila: fila.dropna().tolist(), axis=1)
+descripciones = [' '.join(_) for _ in descripcion_columna]
+
+diccionario = dict(zip(diccionario_txt["Div"], descripciones))
+
+## Combinar todas las tablas en una
+
+tabla_completa = pd.concat(datos, sort = False)
+tabla_sin_apuestas = tabla_completa[tabla_completa.columns[0:23]]
+
+## Distribución de cantidad de goles para local y visitante
+equipos = list(set(tabla_sin_apuestas.HomeTeam))
+
+# Graficar distribución
+dicc_tipo = {'Local': 'FTHG',
+             'Visitante': 'FTAG'}
+
+medias_equipos = []
+datos_para_grafica_keys = []
+datos_para_grafica_values = []
+
+for equipo in tqdm(equipos[1:]):
+    goles_local = list(tabla_sin_apuestas[(tabla_sin_apuestas.HomeTeam == equipo)].FTHG)
+    goles_local_dicc = dict(zip(set(goles_local), [goles_local.count(a) for a in set(goles_local)]))
+
+    goles_visit = list(tabla_sin_apuestas[(tabla_sin_apuestas.AwayTeam == equipo)].FTAG)
+    goles_visit_dicc = dict(zip(set(goles_visit), [goles_visit.count(a) for a in set(goles_local)]))
+
+    for tipo in [("Local", "HomeTeam"), ("Visitante", "AwayTeam")]: 
+        df_tipo = tabla_sin_apuestas[(tabla_sin_apuestas[tipo[1]] == equipo)][dicc_tipo[tipo[0]]]
+        goles_tipo = list(df_tipo)
+        goles_tipo_dicc = dict(zip(set(goles_tipo), [goles_tipo.count(a) for a in set(goles_tipo)]))
+
+        media_empirica = np.array([int(x) for x in goles_tipo]).mean()
+        probabilidades_predichas = [st.poisson.pmf(k, media_empirica, loc=0) for k in goles_tipo_dicc.keys()]
+        frecuencias_empiricas = np.array(list(goles_tipo_dicc.values()))/sum(goles_tipo_dicc.values())
+        
+        c, p = st.chisquare(frecuencias_empiricas, probabilidades_predichas, ddof = len(frecuencias_empiricas) - 2)
+        
+        datos_para_grafica_keys.append((equipo, tipo[0]))
+        datos_para_grafica_values.append((frecuencias_empiricas, goles_tipo_dicc.keys(), probabilidades_predichas, p))
+        
+        medias_equipos.append((equipo, tipo[0], media_empirica))
+        
+datos_para_grafica = dict(zip(datos_para_grafica_keys, datos_para_grafica_values))
+
+## Crear el DataFrame con las medias
+
+medias_locales = np.array([x[2] for x in medias_equipos if x[1]=='Local'])
+medias_visitantes = np.array([x[2] for x in medias_equipos if x[1]=='Visitante'])
+
+datos_df = {'Equipos':equipos[1:], 
+            'Media de local': medias_locales,
+            'Media de visita': medias_visitantes}
+
+datos_medias = pd.DataFrame(data = datos_df)
+
+## Graficas para el equipo seleccionado
+
+equipo_escogido = 'Sevilla'
+localidad = 'Visitante'
+
+frecuencias_empiricas = datos_para_grafica[(equipo_escogido, localidad)][0]
+cantidad_goles_empirica = datos_para_grafica[(equipo_escogido, localidad)][1]
+probabilidades_predichas = datos_para_grafica[(equipo_escogido, localidad)][2]
+valor_p = datos_para_grafica[(equipo_escogido, localidad)][3]
+
+plt.style.use("seaborn")
+plt.bar(cantidad_goles_empirica, frecuencias_empiricas, label = 'Frecuencias empíricas')
+plt.plot(cantidad_goles_empirica, probabilidades_predichas, marker = 'o', color = 'black', markersize = 7, label = 'Frecuencias teóricas')
+plt.title("Distribución de goles por partido para {} - {} \n El valor p para el ajuste es {}".format(equipo_escogido, localidad, p))
+plt.xlabel("Goles por partido")
+plt.legend()
+plt.show()
